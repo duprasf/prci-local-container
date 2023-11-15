@@ -1,0 +1,12 @@
+--------------------
+-- When working with a local DB, this folder will be loaded the first time the DB is
+-- initiallized. You should have a file for your app export. If you are starting a new app
+-- then you can add this line above the grant privileges: "CREATE DATABASE appname;"
+--
+-- This file should be executed last, that's why it is called zz_grant_permissions.sql,
+-- files are loaded alphabettically.
+-------
+-- replace datasename with the name of your database (created in another script in this folder)
+-- replace username with the user for your application, this is the user created automatically
+-- from the secrets/mariadb.env
+GRANT ALL PRIVILEGES ON `prci`.* TO 'prci'@'%';

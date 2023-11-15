@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+
+# This is only for local use. The deployed environments would be set in the environment, not
+# necessarily as a file like in here.
+# ./start-database
+
+APPNAME=prci
+
+IMAGE="mariadb"
+APPTAG="latest"
+RESET=false
+PREFIX="$APPNAME-"
+VOLUME="$APPNAME-mariadb"
+INIT_FOLDER="$PWD/db-init-scripts"
+ENV_FILE=$PWD/environment/db.env
+NETWORK=appnet
+
+print_usage() {
+    echo "Usage: ./start-database [options]"
+    echo " "
+    echo "    -h|--help        Show this message"
+    echo "    -x|--prefix      Prefix the container name [$APPNAME]"
+    echo "    -v|--volume      The name of the volume (or folder) to store the volumes in [$PREFIX-mariadb]"
+    echo "    -i|--init-folder The folder you wish to store the volumes in [$PWD/db-init-scripts]"
+    echo "    -e|--env-file    The file with the environment variable [$PWD/environment/db.env]"
+    echo "                     MONGO_INITDB_ROOT_USERNAME, MONGO_INITDB_ROOT_PASSWORD, MONGO_INITDB_DATABASE"
+    echo "    --reset          Reset/delete the DB volume"
+    echo " "
+    exit;
+}
+
+while test $# -gt 0; do
+  case "$1" in
+    -h|--help)
+        print_usage
+        exit 0
+        ;;
+    --reset)
+        RESET=true
+        shift
+        ;;
+    -v|--volume)
+        shift
+        VOLUME=$1
+        shift
+        ;;
+    -x|--prefix)
+        shift
+        PREFIX="$1-"
+        if [ $VOLUME="$APPNAME-mariadb" ]; then
+            VOLUME="$1-mariadb"
+        fi
+        shift
+        ;;
+    -i|--init-folder)
+        shift
+        INIT_FOLDER=$1
+        shift
+        ;;
+    -e|--env-file)
+        shift
+        ENV_FILE=$1
+        shift
+        ;;
+    *)
+        break
+        ;;
+  esac
+done
+
+if [ ! "$(docker network ls -qf name=${NETWORK})" ]; then
+    echo "Creating network ${NETWORK}..."
+    docker network create ${NETWORK}
+fi
+
+if [ "$(docker ps -qf name=${PREFIX}mariadb)" ]; then
+    echo "Stoping and deleting existing container ${PREFIX}mariadb..."
+    docker stop ${PREFIX}mariadb
+    docker rm ${PREFIX}mariadb
+elif [ "$(docker ps -qaf name=${PREFIX}mariadb)" ]; then
+    echo "Deleting existing container ${PREFIX}mariadb..."
+    docker rm ${PREFIX}mariadb
+fi
+
+if [ "$RESET" = "true" ] ; then
+    echo "Removing DB volume..."
+    if [ -d "${VOLUME}" ]; then
+        rm -Rf $VOLUME
+    elif [ "$(docker volume ls -qf name=${PREFIX}mariadb)" ]; then
+        docker volume rm $VOLUME
+    fi
+fi
+
+INIT_STRING=""
+if [ -d "${INIT_FOLDER}" ]; then
+    INIT_STRING="-v $INIT_FOLDER:/docker-entrypoint-initdb.d"
+fi
+
+echo "Fetching the most recent ${IMAGE}:${APPTAG}"
+docker pull ${IMAGE}:${APPTAG}
+
+echo "Starting ${PREFIX}mariadb..."
+docker run -d --name ${PREFIX}mariadb --net ${NETWORK} \
+    -v /etc/localtime:/etc/localtime:ro \
+    -v /etc/timezone:/etc/timezone:ro \
+    --restart unless-stopped \
+    $INIT_STRING \
+    -v $VOLUME:/data/db \
+    --env-file $ENV_FILE \
+    ${IMAGE}:${APPTAG}
+

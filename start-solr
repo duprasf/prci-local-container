@@ -1,0 +1,15 @@
+docker stop prci-solr
+docker rm prci-solr
+
+docker run -d --name prci-solr --net appnet \
+    --restart unless-stopped \
+    -v /etc/localtime:/etc/localtime:ro \
+    -v /etc/timezone:/etc/timezone:ro \
+    -p 8983:8983 \
+    -v $PWD/code/sites/all/modules/features/clinical_information_search_support/solr:/var/solr/data/prci \
+    -v prci-solr-volume:/var/solr/data/ \
+    -v $PWD/external-storage:/var/prcishared \
+    solr:8.11.2
+
+docker exec -itu 0  prci-solr chown -R solr /var/solr/data
+

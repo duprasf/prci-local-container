@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# /**
+# * Start Drupal WxT container (web)
+# * @author Francois Dupras (francois.dupras@canada.ca)
+# */
+
+APPNAME=prci
+CONTAINER_NAME=$APPNAME
+REMOTE_IMAGE="php-base"
+LOCAL_IMAGE="php-base"
+APPTAG="7.1"
+FOLDER="$PWD/code"
+DOMAIN=localdev.hc-sc.gc.ca
+ENV_FILE="$PWD/environment/.env"
+NETWORK=appnet
+
+RESET=false
+ORIGINAL_USER=$USER
+TRAEFIK_RULE='HostRegexp(`'$DOMAIN'`)'
+TRAEFIK_TLS_MAIN_DOMAIN=$DOMAIN
+TRAEFIK_TLS_SANS_DOMAIN=$DOMAIN,*.hc-sc.gc.ca
+USE_TRAEFIK=false
+PORT='-p 80:80'
+
+if [ "${ORIGINAL_USER}" = "root" ]; then
+    ORIGINAL_USER=$SUDO_USER
+fi
+
+if [ "$(docker ps -qf name=traefik)" ]; then
+    USE_TRAEFIK=true
+fi
+
+# -q : Silence mode
+# --spider : don't get, just check page availability
+wget -q --spider https://jack.hc-sc.gc.ca
+if [ $? -eq 0 ]; then
+    echo "Online, pulling from jack.hc-sc.gc.ca"
+    docker pull $REMOTE_IMAGE:$APPTAG
+    docker pull $REMOTE_IMAGE:latest
+    IMAGE=$REMOTE_IMAGE
+else
+    echo "Offline"
+    IMAGE=$LOCAL_IMAGE
+fi
+
+
+print_usage() {
+    echo "Usage: ./start [options]"
+    echo " "
+    echo "    -h|--help     Show this message"
+    echo "    -l|--local    Use local image instead of jack's image"
+    echo "    -t|--tag      Specify a docker tag for drupal-wxt [latest]"
+    echo "    -x|--prefix   Specify the prefix for the container"
+    echo "    -k|--traefik  Use traefik instead of port 80 follow by the domain name [localdev.hc-sc.gc.ca]"
+    echo "                  Set to use traefik automatically if a container name traefik is running"
+    echo "    -e|--env-file The file with the environment variable [secret/cops.drupal.env]"
+    echo "                  see secrets/cops.drupal.env.dist for an example"
+    echo "    --reset       Reset/delete the volume"
+    echo " "
+    exit;
+}
+
+while test $# -gt 0; do
+  case "$1" in
+    -h|--help)
+        print_usage
+        exit 0
+        ;;
+    -t|--tag)
+        shift
+        APPTAG=$1
+        shift
+        ;;
+    --reset)
+        RESET=true
+        shift
+        ;;
+    -x|--prefix)
+        shift
+        CONTAINER_NAME="${1}-${CONTAINER_NAME}"
+        shift
+        ;;
+    -f|--folder)
+        shift
+        FOLDER=$1
+        shift
+        ;;
+    -e|--env-file)
+        shift
+        ENV_FILE=$1
+        shift
+        ;;
+    -l|--local)
+        shift
+        IMAGE=$LOCAL_IMAGE
+        ;;
+    -k|--traefik)
+        shift
+        if [[ ! -z "$1" ]] && [[ $1 != -* ]] ; then
+            DOMAIN=$1
+            TRAEFIK_RULE='Host(`'$DOMAIN'`)'
+            TRAEFIK_TLS_MAIN_DOMAIN=$DOMAIN
+            TRAEFIK_TLS_SANS_DOMAIN=$DOMAIN
+            shift
+        fi
+        USE_TRAEFIK=true
+        ;;
+    *)
+        break
+        ;;
+  esac
+done
+
+if [ ! "$(docker network ls -qf name=${NETWORK})" ]; then
+  echo "Creating network appnet..."
+  docker network create ${NETWORK}
+fi
+
+if [ "$(docker ps -qf name=${CONTAINER_NAME})" ]; then
+  echo "Stoping and deleting existing container ${CONTAINER_NAME}..."
+  docker stop ${CONTAINER_NAME}
+  docker rm ${CONTAINER_NAME}
+elif [ "$(docker ps -qaf name=${CONTAINER_NAME})" ]; then
+  echo "Deleting container ${CONTAINER_NAME}..."
+  docker rm ${CONTAINER_NAME}
+fi
+
+if [ "$RESET" = "true" ] ; then
+  echo "Removing volume ${VOLUME}..."
+  docker volume rm ${VOLUME}
+fi
+
+if [ "${USE_TRAEFIK}" ]; then
+    PORT=''
+fi
+
+echo "Starting ${CONTAINER_NAME}..."
+docker run -d --name ${CONTAINER_NAME} --net $NETWORK $PORT \
+    -v /etc/localtime:/etc/localtime:ro \
+    -v /etc/timezone:/etc/timezone:ro \
+    --restart unless-stopped \
+    --label traefik.enable=$USE_TRAEFIK \
+    --label traefik.http.routers.${APPNAME}.rule=$TRAEFIK_RULE \
+    --label traefik.http.routers.${APPNAME}.entrypoints=websecure \
+    --label traefik.http.routers.${APPNAME}.tls=true \
+    --label traefik.http.routers.${APPNAME}.tls.domains[0].main=$TRAEFIK_TLS_MAIN_DOMAIN \
+    --label traefik.http.routers.${APPNAME}.tls.domains[0].sans=$TRAEFIK_TLS_SANS_DOMAIN \
+    --label traefik.http.routers.${APPNAME}_http.rule=$TRAEFIK_RULE \
+    --label traefik.http.routers.${APPNAME}_http.entrypoints=web \
+    --env-file $ENV_FILE \
+    -v $FOLDER:/var/www/html \
+    -v $PWD/external-storage:/var/prcishared \
+    ${IMAGE}:${APPTAG}
+
+docker exec -it ${CONTAINER_NAME} chown -R www-data /var/www/html
+docker exec -it ${CONTAINER_NAME} find /var/www/html -type d -exec chmod 775 {} +
+docker exec -it ${CONTAINER_NAME} find /var/www/html -type f -exec chmod 664 {} +
